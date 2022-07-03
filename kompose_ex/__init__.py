@@ -21,12 +21,11 @@ class KomposeEx(object):
         self.cmd = " ".join([cmd, *sys_args])
         self.args, self.args_unknown = self.parse_args(args=sys_args)
         self.version = __version__.__version__
-        with open(self.args.file, "r", encoding="UTF-8") as fr:
-            self.compose = yaml.safe_load(fr.read())
         self.annotations = {
             "kompose-ex.cmd": self.cmd,
             "kompose-ex.version": self.version
         }
+        self.compose = {}
 
     def process_output(self, *args, **kwargs):
         command = kwargs.get("args", args)[0]
@@ -110,7 +109,7 @@ class KomposeEx(object):
         group.add_argument("--deny-egress-cidr", action="extend", nargs="+", metavar="CIDR", dest="deny_egress_cidr")
         args_known, args_unknown = parser.parse_known_args(args=sys_args)
 
-        if args_known.command not in ["convert"]:
+        if args_known.command == "version":
             return args_known, args_unknown
 
         if not path.exists(args_known.file):
@@ -483,6 +482,10 @@ class KomposeEx(object):
         if self.args.command == "version":
             print(self.version)
             return 0
+
+        # Load compose yaml
+        with open(self.args.file, "r", encoding="UTF-8") as fr:
+            self.compose = yaml.safe_load(fr.read())
 
         # Recreate compose yaml
         compose_path = self.recreate_compose()

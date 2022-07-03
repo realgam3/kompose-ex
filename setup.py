@@ -3,19 +3,22 @@
 from os import path
 from setuptools import setup, find_packages
 
-__folder__ = path.dirname(__file__)
+__folder__ = path.abspath(path.dirname(__file__))
 
-with open(path.join(__folder__, "README.md")) as ld_file:
-    long_description = ld_file.read()
-    ld_file.flush()
+with open(path.join(__folder__, 'README.md')) as readme_file:
+    long_description = readme_file.read()
 
-with open(path.join(__folder__, "requirements.txt")) as req_file:
-    install_requires = req_file.read()
+about = {}
+with open(path.join(__folder__, 'kompose_ex', '__version__.py')) as about_file:
+    exec(about_file.read(), about)
+
+with open(path.join(__folder__, 'requirements.txt')) as req_file:
+    install_requires = req_file.readlines()
 
 setup(
-    name="kompose-ex",
-    version="1.0.0",
-    description="kompose extended - extension of kompose for CTF ci/cd",
+    name=about['__title__'],
+    version=about['__version__'],
+    description=about['__description__'],
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="RealGame (Tomer Zait)",
