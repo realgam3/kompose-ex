@@ -1,0 +1,38 @@
+# Docker Files
+Dockerfile
+.dockerignore
+docker-compose.yml
+k8s/
+k8s.yaml
+
+# Git Files
+.git/
+.gitignore
+
+# CI/CD Files
+.gitlab-ci.yml
+
+# IDE Files
+.idea/
+
+# Python Files
+__pycache__/
+*.py[cod]
+*$py.class
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+ENV/
+
+# Project Files
+examples/
