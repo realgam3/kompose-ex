@@ -54,7 +54,8 @@ class KomposeEx(object):
 
             if controller_ex_type == "cronjob" and not labels.get("kompose-ex.cronjob.schedule"):
                 raise Exception(
-                    "kompose-ex.controller.type 'cronjob' was specified without kompose-ex.cronjob.schedule")
+                    "kompose-ex.controller.type 'cronjob' was specified without kompose-ex.cronjob.schedule"
+                )
 
             if controller_ex_type == "cronjob":
                 restart = service.get("restart", "no")
@@ -353,7 +354,7 @@ class KomposeEx(object):
                         "daemonsets"
                     ],
                     "resourceNames": [
-                        list(cron_restart_services.keys())
+                        *cron_restart_services.keys()
                     ],
                     "verbs": [
                         "get",
@@ -444,20 +445,17 @@ class KomposeEx(object):
         services = {}
         _services = self.compose.get("services", [])
         for name, service in _services.items():
-            _type = ""
             public = True
             labels = service.get("labels", {})
             service_type = labels.get("kompose.service.type", "").lower()
 
             if "kompose.service.expose" in labels:
-                _type = "ingress"
-            elif service_type in ["loadbalancer", "nodeport"]:
-                _type = service_type
-            else:
+                service_type = "ingress"
+            elif service_type not in ["loadbalancer", "nodeport"]:
                 public = False
 
             services[name] = {
-                "type": _type,
+                "type": service_type,
                 "public": public,
                 "labels": labels,
                 "service": service,
@@ -508,9 +506,11 @@ class KomposeEx(object):
         try:
             return self.run()
         except Exception as ex:
-            self.logger.exception("")
-            self.logger.fatal(ex.args[-1])
+            self.logger.fatal(ex)
         return 1
+
+
+6
 
 
 def main(args=None):
