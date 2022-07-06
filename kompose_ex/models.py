@@ -3,14 +3,6 @@ from kubernetes.client import models
 from kubernetes.client.models import *
 
 
-class Convert(object):
-    def __init__(self, obj):
-        self.object = obj
-
-    def to_dict(self):
-        return self.object
-
-
 def convert(k8s_object: dict):
     k8s_obj = {}
     for _key, obj in k8s_object.items():

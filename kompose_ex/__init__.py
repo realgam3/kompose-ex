@@ -2,6 +2,7 @@ import os
 import sys
 import yaml
 import json
+import shutil
 import atexit
 import logging
 import argparse
@@ -354,7 +355,7 @@ class KomposeEx(object):
                         "daemonsets"
                     ],
                     "resourceNames": [
-                        *cron_restart_services.keys()
+                        *cron_restart_services
                     ],
                     "verbs": [
                         "get",
@@ -472,6 +473,18 @@ class KomposeEx(object):
 
         return services
 
+    def clean(self, output_path=None):
+        output_path = output_path or self.args.out
+        if not path.exists(output_path):
+            return
+
+        is_file = path.isfile(output_path)
+        if not is_file:
+            shutil.rmtree(output_path, ignore_errors=True)
+            return
+
+        os.remove(output_path)
+
     def run(self, configure_logger=True):
         # Configure basic logger
         if configure_logger:
@@ -489,6 +502,9 @@ class KomposeEx(object):
         compose_path = self.recreate_compose()
         if not compose_path:
             return 1
+
+        if self.args.clean:
+            self.clean()
 
         # Convert docker compose yaml using kompose
         # self.logger.info(f"Converting {path.basename(self.args.file)} to {self.args.out}")
@@ -509,10 +525,11 @@ class KomposeEx(object):
             self.logger.fatal(ex)
         return 1
 
-
-6
+    @classmethod
+    def main(cls, args=None):
+        kompose = cls(args=args)
+        return kompose.start()
 
 
 def main(args=None):
-    kompose = KomposeEx(args=args)
-    return kompose.start()
+    return KomposeEx.main(args=args)
