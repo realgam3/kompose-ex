@@ -1,5 +1,8 @@
 import os
 import sys
+import time
+
+import kubernetes.utils
 import yaml
 import json
 import shutil
@@ -9,9 +12,11 @@ import argparse
 import tempfile
 import subprocess
 from os import path
+from glob import glob
 from jsonpath_ng.ext import parser
+from kubernetes import config, client
 
-from kompose_ex import __version__, models
+from kompose_ex import __version__, models, api, utils
 
 
 class KomposeEx(object):
@@ -27,21 +32,6 @@ class KomposeEx(object):
             "kompose-ex.version": self.version
         }
         self.compose = {}
-
-    def process_output(self, *args, **kwargs):
-        command = kwargs.get("args", args)[0]
-        code = 0
-        try:
-            output = subprocess.check_output(*args, **kwargs)
-            for line in output.decode().splitlines():
-                self.logger.info(f"[{command}] {line}")
-        except subprocess.CalledProcessError as ex:
-            output = ex.output
-            for line in ex.output.decode().splitlines():
-                self.logger.error(f"[{command}] {line}")
-            self.logger.error(f"[{command}] exit {ex.returncode}")
-            code = ex.returncode,
-        return code, output
 
     def recreate_compose(self):
         for service_name, service in self.compose.get("services", {}).items():
@@ -97,21 +87,23 @@ class KomposeEx(object):
     def parse_args(args=None):
         sys_args = args or sys.argv[1:]
         parser = argparse.ArgumentParser()
-        parser.add_argument("command", choices=["convert", "version"])
+        parser.add_argument("command", choices=["convert", "deploy", "version", "install"])
         parser.add_argument("-f", "--file", dest="file", default="docker-compose.yml")
         parser.add_argument("-o", "--out", dest="out", default="k8s")
         parser.add_argument("-c", "--chart", action="store_true", dest="chart")
         parser.add_argument("-j", "--json", action="store_true", dest="json")
+        parser.add_argument("-n", "--namespace", dest="namespace", default="default")
         parser.add_argument("--indent", dest="indent", type=int, default=2)
         parser.add_argument("--clean", action="store_true", dest="clean")
-        parser.add_argument("--namespace", dest="namespace")
         parser.add_argument("--deny-ingress", action="store_true", dest="deny_ingress")
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--deny-egress", action="store_true", dest="deny_egress")
         group.add_argument("--deny-egress-cidr", action="extend", nargs="+", metavar="CIDR", dest="deny_egress_cidr")
+        parser.add_argument("--create-namespace", action="store_true", dest="create_namespace")
+        parser.add_argument("--delete-namespace", action="store_true", dest="delete_namespace")
         args_known, args_unknown = parser.parse_known_args(args=sys_args)
 
-        if args_known.command == "version":
+        if args_known.command not in ["convert", "deploy"]:
             return args_known, args_unknown
 
         if not path.exists(args_known.file):
@@ -132,9 +124,13 @@ class KomposeEx(object):
 
         return records
 
-    def kompose_convert(self, compose_path=None):
+    def kompose_convert(self, kompose_path="kompose", compose_path=None):
+        files = glob(path.join(self.directory, "kompose*"))
+        if files:
+            kompose_path = files[0]
+
         args = [
-            "kompose", self.args.command,
+            kompose_path, "convert",
             "-f", compose_path or self.args.file,
             "-o", self.args.out,
             "--indent", str(self.args.indent),
@@ -144,9 +140,10 @@ class KomposeEx(object):
             args.append("-c")
         if self.args.json:
             args.append("-j")
-        return_code, _output = self.process_output(
+        return_code, _output = utils.process_output(
             args=args,
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
+            logger=self.logger
         )
         return return_code
 
@@ -165,7 +162,7 @@ class KomposeEx(object):
         items = {}
         network_policy_api_version = "networking.k8s.io/v1"
 
-        # Deny Ingress
+        # Deny ingress
         if self.args.deny_ingress:
             items["deny-ingress-network-policy"] = models.V1NetworkPolicy(
                 api_version=network_policy_api_version,
@@ -485,13 +482,29 @@ class KomposeEx(object):
 
         os.remove(output_path)
 
+    @property
+    def directory(self):
+        homedir = path.expanduser('~')
+        return path.join(homedir, ".kompose-ex")
+
+    def install(self):
+        os.makedirs(self.directory, exist_ok=True)
+        kompose_version = utils.install_kompose(self.directory, version="latest")
+        self.logger.info(f"kompose {kompose_version} installed")
+
     def run(self, configure_logger=True):
         # Configure basic logger
         if configure_logger:
             self.configure_logger()
 
+        # Print version
         if self.args.command == "version":
             print(self.version)
+            return 0
+
+        # Install requirements
+        if self.args.command == "install":
+            self.install()
             return 0
 
         # Load compose yaml
@@ -503,6 +516,7 @@ class KomposeEx(object):
         if not compose_path:
             return 1
 
+        # Clean files
         if self.args.clean:
             self.clean()
 
@@ -514,7 +528,27 @@ class KomposeEx(object):
 
         # Get compose services
         services = self.get_services()
+
+        # Convert with kompose-ex
         self.kompose_ex_convert(services)
+
+        if self.args.command != "deploy":
+            return 0
+
+        # Delete namespace
+        config.load_config()
+        if self.args.delete_namespace:
+            api.delete_namespace(self.args.namespace)
+
+        # Create namespace
+        if self.args.create_namespace or self.args.delete_namespace:
+            api.create_namespace(self.args.namespace)
+
+        # Apply kubernetes files
+        out_path = self.args.out
+        if self.args.chart:
+            out_path = path.join(out_path, "templates")
+        api.apply(out_path, namespace=self.args.namespace)
 
         return 0
 
