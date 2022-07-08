@@ -1,6 +1,7 @@
-import logging
 import os
 import time
+import shutil
+import logging
 import tarfile
 import platform
 import requests
@@ -12,7 +13,9 @@ from jsonpath_ng.ext import parser
 
 
 # Retries Decorator
-def retries(number_of_retries=15, delay=1, reraise=True, log=None):
+def retries(number_of_retries=15, delay=1, reraise=True, logger=None):
+    logger = logger or logging.getLogger(__name__)
+
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -20,8 +23,8 @@ def retries(number_of_retries=15, delay=1, reraise=True, log=None):
                 try:
                     return func(*args, **kwargs)
                 except Exception as ex:
-                    if log:
-                        log.error(f"Function {func.__name__} call try number {i + 1} failed with {ex}")
+                    if logger:
+                        logger.error(f"Function {func.__name__} call [{i + 1}/{number_of_retries}] failed ({ex})")
                     time.sleep(delay)
             if reraise:
                 raise Exception(f"Function {func.__name__} Can't try anymore")
@@ -48,6 +51,7 @@ def process_output(*args, **kwargs):
     return code, output
 
 
+@retries(number_of_retries=2)
 def download_file(url, download_path=None):
     download_path = download_path or path.basename(urlparse(url).path)
     with requests.get(url, stream=True) as r:
@@ -58,6 +62,7 @@ def download_file(url, download_path=None):
     return download_path
 
 
+@retries(number_of_retries=2)
 def install_kompose(download_path=None, version="latest"):
     download_path = download_path or os.getcwd()
     machine = platform.machine().lower()
@@ -83,3 +88,16 @@ def install_kompose(download_path=None, version="latest"):
         os.replace(path.join(download_path, filename), path.join(download_path, short_filename))
     os.remove(local_filename)
     return res_json['tag_name']
+
+
+@retries(number_of_retries=2)
+def clean(files_path):
+    if not path.exists(files_path):
+        return
+
+    is_file = path.isfile(files_path)
+    if not is_file:
+        shutil.rmtree(files_path, ignore_errors=True)
+        return
+
+    os.remove(files_path)

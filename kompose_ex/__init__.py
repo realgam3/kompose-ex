@@ -1,11 +1,7 @@
 import os
 import sys
-import time
-
-import kubernetes.utils
 import yaml
 import json
-import shutil
 import atexit
 import logging
 import argparse
@@ -13,8 +9,8 @@ import tempfile
 import subprocess
 from os import path
 from glob import glob
+from kubernetes import config
 from jsonpath_ng.ext import parser
-from kubernetes import config, client
 
 from kompose_ex import __version__, models, api, utils
 
@@ -470,18 +466,6 @@ class KomposeEx(object):
 
         return services
 
-    def clean(self, output_path=None):
-        output_path = output_path or self.args.out
-        if not path.exists(output_path):
-            return
-
-        is_file = path.isfile(output_path)
-        if not is_file:
-            shutil.rmtree(output_path, ignore_errors=True)
-            return
-
-        os.remove(output_path)
-
     @property
     def directory(self):
         homedir = path.expanduser('~')
@@ -518,7 +502,7 @@ class KomposeEx(object):
 
         # Clean files
         if self.args.clean:
-            self.clean()
+            utils.clean(self.args.out)
 
         # Convert docker compose yaml using kompose
         # self.logger.info(f"Converting {path.basename(self.args.file)} to {self.args.out}")
