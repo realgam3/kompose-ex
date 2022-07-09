@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from kompose_ex import main
+from . import main
 
 if __name__ == "__main__":
     exit(main())

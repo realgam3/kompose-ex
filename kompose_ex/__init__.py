@@ -12,7 +12,8 @@ from glob import glob
 from kubernetes import config
 from jsonpath_ng.ext import parser
 
-from kompose_ex import __version__, models, api, utils
+from . import __version__
+from . import models, api, utils
 
 
 class KomposeEx(object):
@@ -82,7 +83,7 @@ class KomposeEx(object):
     @staticmethod
     def parse_args(args=None):
         sys_args = args or sys.argv[1:]
-        parser = argparse.ArgumentParser()
+        parser = argparse.ArgumentParser(prog=__version__.__title__)
         parser.add_argument("command", choices=["convert", "deploy", "version", "install"])
         parser.add_argument("-f", "--file", dest="file", default="docker-compose.yml")
         parser.add_argument("-o", "--out", dest="out", default="k8s")
@@ -296,7 +297,7 @@ class KomposeEx(object):
                     pod = jsonpath_expr.find(output)[0].value
                     output["items"].remove(pod)
                 else:
-                    f_path = path.join(self.args.out, f"{service_name}-pod.{file_ext}")
+                    f_path = path.join(out_path, f"{service_name}-pod.{file_ext}")
                     with open(f_path) as fr:
                         pod = yaml.safe_load(fr)
                     os.remove(f_path)
@@ -414,13 +415,13 @@ class KomposeEx(object):
 
         # If output is file
         if is_file:
-            with open(self.args.out, "w", encoding="UTF-8") as fw:
+            with open(out_path, "w", encoding="UTF-8") as fw:
                 kompose_items.extend(items.values())
                 if self.args.json:
                     json.dump(output, fw, indent=self.args.indent)
                 else:
                     yaml.safe_dump(output, stream=fw, indent=self.args.indent, width=0x7fffffff)
-            self.logger.info(f"Kubernetes file \"{self.args.out}\" updated")
+            self.logger.info(f"Kubernetes file \"{out_path}\" updated")
             return
 
         # If output is directory

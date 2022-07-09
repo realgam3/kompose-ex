@@ -11,6 +11,9 @@ from os import path
 from urllib.parse import urlparse
 from jsonpath_ng.ext import parser
 
+machine = platform.machine().lower()
+system = platform.system().lower()
+
 
 # Retries Decorator
 def retries(number_of_retries=15, delay=1, reraise=True, logger=None):
@@ -27,7 +30,7 @@ def retries(number_of_retries=15, delay=1, reraise=True, logger=None):
                         logger.error(f"Function {func.__name__} call [{i + 1}/{number_of_retries}] failed ({ex})")
                     time.sleep(delay)
             if reraise:
-                raise Exception(f"Function {func.__name__} Can't try anymore")
+                raise Exception(f"Function {func.__name__} failed too many times")
 
         return wrapper
 
@@ -65,8 +68,8 @@ def download_file(url, download_path=None):
 @retries(number_of_retries=2)
 def install_kompose(download_path=None, version="latest"):
     download_path = download_path or os.getcwd()
-    machine = platform.machine().lower()
-    system = platform.system().lower()
+
+    # Find kompose tar.gz file
     res = requests.get(f"https://api.github.com/repos/kubernetes/kompose/releases/{version}")
     res_json = res.json()
     jsonpath_expr = parser.parse(
@@ -75,9 +78,13 @@ def install_kompose(download_path=None, version="latest"):
     res_jsonpath = jsonpath_expr.find(res_json)
     if not res_jsonpath:
         raise Exception(f"could not find version for kompose-{system}-{machine}")
+
+    # Download kompose tar.gz file
     browser_download_url = res_jsonpath[0].value
     local_filename = path.join(download_path, path.basename(browser_download_url))
     download_file(browser_download_url, local_filename)
+
+    # Extract kompose tar.gz file
     with tarfile.open(local_filename) as tf:
         filename = tf.getnames()[0]
         short_filename = f"kompose"
@@ -87,6 +94,8 @@ def install_kompose(download_path=None, version="latest"):
         tf.extract(filename, download_path)
         os.replace(path.join(download_path, filename), path.join(download_path, short_filename))
     os.remove(local_filename)
+
+    # Return version
     return res_json['tag_name']
 
 
