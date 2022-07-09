@@ -157,16 +157,15 @@ def patch(files_path, verbose=False, logger=None, **kwargs):
 
 
 @utils.retries(10, delay=2)
-def service_load_balancer(name, namespace="default", ingress=False):
+def load_balancer_address(name, namespace="default", ingress=False):
     core_api = client.CoreV1Api()
-    network_api = client.NetworkingV1Api()
-
     read_namespaced_func = core_api.read_namespaced_service
     if ingress:
+        network_api = client.NetworkingV1Api()
         read_namespaced_func = network_api.read_namespaced_ingress
 
-    service = read_namespaced_func(
+    status = read_namespaced_func(
         name=name,
         namespace=namespace
-    )
-    return service.status.load_balancer.ingress[0].hostname
+    ).status
+    return status.load_balancer.ingress[0].hostname
