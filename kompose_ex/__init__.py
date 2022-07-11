@@ -73,14 +73,6 @@ class KomposeEx(object):
             self.logger.error(ex.args[-1])
 
     @staticmethod
-    def configure_logger():
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(message)s",
-            datefmt="%d-%m-%y %H:%M:%S"
-        )
-
-    @staticmethod
     def parse_args(args=None):
         sys_args = args or sys.argv[1:]
         parser = argparse.ArgumentParser(prog=__version__.__title__)
@@ -90,6 +82,7 @@ class KomposeEx(object):
         parser.add_argument("-c", "--chart", action="store_true", dest="chart")
         parser.add_argument("-j", "--json", action="store_true", dest="json")
         parser.add_argument("-n", "--namespace", dest="namespace", default="default")
+        parser.add_argument("-v", "--verbose", action="count", dest="verbose", default=0)
         parser.add_argument("--indent", dest="indent", type=int, default=2)
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--skip", action="store_true", dest="skip")
@@ -242,13 +235,13 @@ class KomposeEx(object):
                     f_path = path.join(out_path, f"{service_name}-daemonset.{file_ext}")
                     with open(f_path) as fr:
                         daemonset = yaml.safe_load(fr)
-                        daemonset["updated"] = True
 
                 daemonset["spec"]["selector"] = {
                     "matchLabels": {
                         "io.kompose.service": service_name
                     }
                 }
+                daemonset["metadata"]["annotations"]["kompose-ex.updated"] = "true"
                 items[f"{service_name}-daemonset"] = daemonset
 
             # Fix Ingress
@@ -263,7 +256,6 @@ class KomposeEx(object):
                     f_path = path.join(out_path, f"{service_name}-ingress.{file_ext}")
                     with open(f_path) as fr:
                         ingress = yaml.safe_load(fr)
-                        ingress["updated"] = True
 
                 if service["ingress"]["tls"] == "default":
                     for tls_rule in ingress["spec"]["tls"]:
@@ -272,6 +264,7 @@ class KomposeEx(object):
                 if service["ingress"]["class"]:
                     ingress["spec"]["ingressClassName"] = service["ingress"]["class"]
 
+                ingress["metadata"]["annotations"]["kompose-ex.updated"] = "true"
                 items[f"{service_name}-ingress"] = ingress
 
             # Allow ingress to service
@@ -450,7 +443,7 @@ class KomposeEx(object):
 
         # If output is directory
         for item_name, item in items.items():
-            updated = item.pop("updated", False)
+            updated = item["metadata"]["annotations"].get("kompose-ex.updated")
             f_path = path.normpath(path.join(out_path, f"{item_name}.{file_ext}"))
             with open(f_path, "w") as fw:
                 if self.args.json:
@@ -508,11 +501,7 @@ class KomposeEx(object):
         kompose_version = utils.install_kompose(self.directory, version="latest")
         self.logger.info(f"kompose {kompose_version} installed")
 
-    def run(self, configure_logger=True):
-        # Configure basic logger
-        if configure_logger:
-            self.configure_logger()
-
+    def run(self):
         # Print version
         if self.args.command == "version":
             print(self.version)
@@ -566,7 +555,7 @@ class KomposeEx(object):
         out_path = self.args.out
         if self.args.chart:
             out_path = path.join(out_path, "templates")
-        api.apply(out_path, namespace=self.args.namespace)
+        api.apply(out_path, namespace=self.args.namespace, verbose=self.args.verbose > 1)
 
         return 0
 
@@ -580,6 +569,14 @@ class KomposeEx(object):
     @classmethod
     def main(cls, args=None):
         kompose = cls(args=args)
+
+        # Configure basic logger
+        logging.basicConfig(
+            level=logging.INFO if not kompose.args.verbose else logging.DEBUG,
+            format="%(asctime)s %(levelname)s %(message)s",
+            datefmt="%d-%m-%y %H:%M:%S"
+        )
+
         return kompose.start()
 
 
