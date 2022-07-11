@@ -76,7 +76,7 @@ class KomposeEx(object):
     def parse_args(args=None):
         sys_args = args or sys.argv[1:]
         parser = argparse.ArgumentParser(prog=__version__.__title__)
-        parser.add_argument("command", choices=["convert", "deploy", "version", "install"])
+        parser.add_argument("command", choices=["convert", "deploy", "update-records", "version", "install"])
         parser.add_argument("-f", "--file", dest="file", default="docker-compose.yml")
         parser.add_argument("-o", "--out", dest="out", default="k8s")
         parser.add_argument("-c", "--chart", action="store_true", dest="chart")
@@ -93,13 +93,20 @@ class KomposeEx(object):
         group.add_argument("--deny-egress-cidr", action="extend", nargs="+", metavar="CIDR", dest="deny_egress_cidr")
         parser.add_argument("--create-namespace", action="store_true", dest="create_namespace")
         parser.add_argument("--delete-namespace", action="store_true", dest="delete_namespace")
+        group = parser.add_mutually_exclusive_group()
+        group.add_argument("--route53-hostedzone", dest="route53_hostedzone")
+        group.add_argument("--route53-hostedzone-id", dest="route53_hostedzone_id")
         args_known, args_unknown = parser.parse_known_args(args=sys_args)
 
-        if args_known.command not in ["convert", "deploy"]:
+        if args_known.command not in ["convert", "deploy", "update-records"]:
             return args_known, args_unknown
 
         if not path.exists(args_known.file):
-            parser.error(f"file {args_known.file} is not exist.")
+            parser.error(f"file {args_known.file} is not exist")
+
+        if args_known.command == "update-records" and \
+                not any([args_known.route53_hostedzone, args_known.route53_hostedzone_id]):
+            parser.error(f"update-records argument --route53-hostedzone/--route53-hostedzone-id is not set")
 
         return args_known, args_unknown
 
@@ -501,6 +508,45 @@ class KomposeEx(object):
         kompose_version = utils.install_kompose(self.directory, version="latest")
         self.logger.info(f"kompose {kompose_version} installed")
 
+    def convert(self, compose_path, services):
+        # Skip conversion (Only deploy)
+        skip = self.args.skip and self.args.command == "deploy"
+        if skip:
+            return 0
+
+        # Clean files
+        if self.args.clean:
+            utils.clean(self.args.out)
+
+        # Convert docker compose yaml using kompose
+        return_code = self.kompose_convert(compose_path=compose_path)
+        if return_code:
+            raise Exception("Kompose conversion failed")
+
+        # Convert with kompose-ex
+        self.kompose_ex_convert(services)
+
+        return 0
+
+    def deploy(self):
+        # Delete namespace
+        if self.args.delete_namespace:
+            api.delete_namespace(self.args.namespace)
+
+        # Create namespace
+        if self.args.create_namespace or self.args.delete_namespace:
+            api.create_namespace(self.args.namespace)
+
+        # Apply kubernetes files
+        out_path = self.args.out
+        if self.args.chart:
+            out_path = path.join(out_path, "templates")
+        api.apply(out_path, namespace=self.args.namespace, verbose=self.args.verbose > 1)
+
+        # Clean files
+        if self.args.clean > 1:
+            utils.clean(self.args.out)
+
     def run(self):
         # Print version
         if self.args.command == "version":
@@ -524,42 +570,41 @@ class KomposeEx(object):
         # Get compose services
         services = self.get_services()
 
-        # Skip conversion (Only deploy)
-        skip = self.args.skip and self.args.command == "deploy"
-        if not skip:
-            # Clean files
-            if self.args.clean:
-                utils.clean(self.args.out)
+        # Convert docker-compose to kubernetes objects
+        if self.args.command in ["convert", "deploy"]:
+            self.convert(compose_path, services)
 
-            # Convert docker compose yaml using kompose
-            return_code = self.kompose_convert(compose_path=compose_path)
-            if return_code:
-                return return_code
-
-            # Convert with kompose-ex
-            self.kompose_ex_convert(services)
-
-        if self.args.command != "deploy":
+        if self.args.command == "convert":
             return 0
 
-        # Delete namespace
+        # Load kubernetes config
         config.load_config()
-        if self.args.delete_namespace:
-            api.delete_namespace(self.args.namespace)
 
-        # Create namespace
-        if self.args.create_namespace or self.args.delete_namespace:
-            api.create_namespace(self.args.namespace)
+        if self.args.command == "deploy":
+            # Deploy kubernetes objects
+            self.deploy()
 
-        # Apply kubernetes files
-        out_path = self.args.out
-        if self.args.chart:
-            out_path = path.join(out_path, "templates")
-        api.apply(out_path, namespace=self.args.namespace, verbose=self.args.verbose > 1)
+        # Update Rout53 DNS Records
+        if any([self.args.route53_hostedzone, self.args.route53_hostedzone_id]):
+            from .dns import route53
 
-        # Clean files
-        if self.args.clean > 1:
-            utils.clean(self.args.out)
+            route53_hostedzone_id = self.args.route53_hostedzone_id
+            if not route53_hostedzone_id:
+                route53_hostedzone_id = route53.get_hosted_zones_by_name(self.args.route53_hostedzone)
+
+            for service_name, service in services.items():
+                records = service.get("records", [])
+                if not records:
+                    return
+
+                balancer_address = api.load_balancer_address(
+                    name=service_name,
+                    namespace=self.args.namespace,
+                    ingress=service.get("type", "") == "ingress"
+                )
+                for record in records:
+                    route53.update_cname_record(route53_hostedzone_id, record, balancer_address)
+                    self.logger.info(f"Route53 record {record} is set to {balancer_address}")
 
         return 0
 

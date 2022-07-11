@@ -33,7 +33,7 @@ setup(
     install_requires=install_requires,
     license="GPLv3",
     platforms="any",
-    url="https://gitlab.com/BSidesTLV/CTF22/kompose-ex",
+    url=about["__url__"],
     classifiers=[
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Development Status :: 5 - Production/Stable",
@@ -51,5 +51,12 @@ setup(
         "Topic :: Internet :: Proxy Servers",
         "Topic :: Software Development :: Testing",
         "Topic :: Software Development :: Libraries :: Python Modules",
-    ]
+    ],
+    extras_require={
+        "route53": ["boto3 >= 1.24.27"],
+        "update-records": ["boto3 >= 1.24.27"],
+    },
+    project_urls={
+        "Source": "https://gitlab.com/BSidesTLV/CTF22/kompose-ex",
+    },
 )
