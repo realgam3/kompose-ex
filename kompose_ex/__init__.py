@@ -547,6 +547,30 @@ class KomposeEx(object):
         if self.args.clean > 1:
             utils.clean(self.args.out)
 
+    def update_records(self, services):
+        # Update Rout53 DNS Records
+        if any([self.args.route53_hostedzone, self.args.route53_hostedzone_id]):
+            from .dns import route53
+
+            route53_hostedzone_id = self.args.route53_hostedzone_id
+            if not route53_hostedzone_id:
+                route53_hostedzone_id = route53.get_hosted_zones_by_name(self.args.route53_hostedzone)
+
+            for service_name, service in services.items():
+                records = service.get("records", [])
+                if not records:
+                    return
+
+                balancer_address = api.load_balancer_address(
+                    name=service_name,
+                    namespace=self.args.namespace,
+                    ingress=service.get("type", "") == "ingress"
+                )
+                for record in records:
+                    route53.update_cname_record(route53_hostedzone_id, record, balancer_address)
+                    self.logger.info(f"Route53 record {record} is set to {balancer_address}")
+            return
+
     def run(self):
         # Print version
         if self.args.command == "version":
@@ -584,27 +608,7 @@ class KomposeEx(object):
             # Deploy kubernetes objects
             self.deploy()
 
-        # Update Rout53 DNS Records
-        if any([self.args.route53_hostedzone, self.args.route53_hostedzone_id]):
-            from .dns import route53
-
-            route53_hostedzone_id = self.args.route53_hostedzone_id
-            if not route53_hostedzone_id:
-                route53_hostedzone_id = route53.get_hosted_zones_by_name(self.args.route53_hostedzone)
-
-            for service_name, service in services.items():
-                records = service.get("records", [])
-                if not records:
-                    return
-
-                balancer_address = api.load_balancer_address(
-                    name=service_name,
-                    namespace=self.args.namespace,
-                    ingress=service.get("type", "") == "ingress"
-                )
-                for record in records:
-                    route53.update_cname_record(route53_hostedzone_id, record, balancer_address)
-                    self.logger.info(f"Route53 record {record} is set to {balancer_address}")
+        self.update_records(services)
 
         return 0
 

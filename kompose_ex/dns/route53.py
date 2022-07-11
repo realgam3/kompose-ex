@@ -24,7 +24,7 @@ def change_resource_record_sets(zone_id, name, record, ttl=60):
 
 
 def update_cname_record(zone_id, name, record, ttl=60):
-    res = update_cname_record(zone_id, name, record, ttl=ttl)
+    res = change_resource_record_sets(zone_id, name, record, ttl=ttl)
     return res
 
 
