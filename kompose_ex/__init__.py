@@ -249,6 +249,29 @@ class KomposeEx(object):
                 daemonset["updated"] = True
                 items[f"{service_name}-daemonset"] = daemonset
 
+            # Fix Ingress
+            if service["ingress"]["class"] or service["ingress"]["tls"] == "default":
+                if is_file:
+                    jsonpath_expr = parser.parse(
+                        f"$.items[?(@.kind == 'Ingress' & @.metadata.name== {repr(service_name)})]"
+                    )
+                    ingress = jsonpath_expr.find(output)[0].value
+                    output["items"].remove(ingress)
+                else:
+                    f_path = path.join(out_path, f"{service_name}-ingress.{file_ext}")
+                    with open(f_path) as fr:
+                        ingress = yaml.safe_load(fr)
+
+                if service["ingress"]["tls"] == "default":
+                    for tls_rule in ingress["spec"]["tls"]:
+                        tls_rule.pop("secretName", None)
+
+                if service["ingress"]["class"]:
+                    ingress["spec"]["ingressClassName"] = service["ingress"]["class"]
+
+                ingress["updated"] = True
+                items[f"{service_name}-ingress"] = ingress
+
             # Allow ingress to service
             if allow_ingress:
                 items[f"allow-ingress-{service_name}-network-policy"] = models.V1NetworkPolicy(
@@ -290,7 +313,6 @@ class KomposeEx(object):
             # Create CronJob
             if service["cronjob"]:
                 if is_file:
-                    # print(json.dumps(output, indent=2))
                     jsonpath_expr = parser.parse(
                         f"$.items[?(@.kind == 'Pod' & @.metadata.name== {repr(service_name)})]"
                     )
@@ -455,6 +477,13 @@ class KomposeEx(object):
                 "labels": labels,
                 "service": service,
                 "build": "build" in service,
+                "ingress": {
+                    "tls": labels.get("kompose.service.expose.tls-secret", "").lower(),
+                    "class": (
+                            labels.get("kompose.service.expose.ingress-class-name", "") or
+                            labels.get("kompose-ex.service.expose.ingress-class-name", "")
+                    ).lower()
+                },
                 "records": self.parse_records(labels=labels),
                 "controller": labels.get("kompose.controller.type", "deployment").lower(),
                 "allow_egress": labels.get("kompose-ex.egress.allow", "false").lower() == "true",

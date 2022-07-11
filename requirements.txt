@@ -1,3 +1,4 @@
 PyYAML>=5.4.1
+requests>=2.28.0
 kubernetes>=23.6.0
 jsonpath-ng>=1.5.3
