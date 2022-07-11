@@ -85,8 +85,8 @@ class KomposeEx(object):
         parser.add_argument("-v", "--verbose", action="count", dest="verbose", default=0)
         parser.add_argument("--indent", dest="indent", type=int, default=2)
         group = parser.add_mutually_exclusive_group()
-        group.add_argument("--skip", action="store_true", dest="skip")
-        group.add_argument("--clean", action="store_true", dest="clean")
+        group.add_argument("-s", "--skip", action="store_true", dest="skip")
+        group.add_argument("-d", "--clean", action="count", dest="clean", default=0)
         parser.add_argument("--deny-ingress", action="store_true", dest="deny_ingress")
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--deny-egress", action="store_true", dest="deny_egress")
@@ -556,6 +556,10 @@ class KomposeEx(object):
         if self.args.chart:
             out_path = path.join(out_path, "templates")
         api.apply(out_path, namespace=self.args.namespace, verbose=self.args.verbose > 1)
+
+        # Clean files
+        if self.args.clean > 1:
+            utils.clean(self.args.out)
 
         return 0
 
