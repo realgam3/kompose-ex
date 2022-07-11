@@ -91,7 +91,9 @@ class KomposeEx(object):
         parser.add_argument("-j", "--json", action="store_true", dest="json")
         parser.add_argument("-n", "--namespace", dest="namespace", default="default")
         parser.add_argument("--indent", dest="indent", type=int, default=2)
-        parser.add_argument("--clean", action="store_true", dest="clean")
+        group = parser.add_mutually_exclusive_group()
+        group.add_argument("--skip", action="store_true", dest="skip")
+        group.add_argument("--clean", action="store_true", dest="clean")
         parser.add_argument("--deny-ingress", action="store_true", dest="deny_ingress")
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--deny-egress", action="store_true", dest="deny_egress")
@@ -240,13 +242,13 @@ class KomposeEx(object):
                     f_path = path.join(out_path, f"{service_name}-daemonset.{file_ext}")
                     with open(f_path) as fr:
                         daemonset = yaml.safe_load(fr)
+                        daemonset["updated"] = True
 
                 daemonset["spec"]["selector"] = {
                     "matchLabels": {
                         "io.kompose.service": service_name
                     }
                 }
-                daemonset["updated"] = True
                 items[f"{service_name}-daemonset"] = daemonset
 
             # Fix Ingress
@@ -261,6 +263,7 @@ class KomposeEx(object):
                     f_path = path.join(out_path, f"{service_name}-ingress.{file_ext}")
                     with open(f_path) as fr:
                         ingress = yaml.safe_load(fr)
+                        ingress["updated"] = True
 
                 if service["ingress"]["tls"] == "default":
                     for tls_rule in ingress["spec"]["tls"]:
@@ -269,7 +272,6 @@ class KomposeEx(object):
                 if service["ingress"]["class"]:
                     ingress["spec"]["ingressClassName"] = service["ingress"]["class"]
 
-                ingress["updated"] = True
                 items[f"{service_name}-ingress"] = ingress
 
             # Allow ingress to service
@@ -443,13 +445,13 @@ class KomposeEx(object):
                     json.dump(output, fw, indent=self.args.indent)
                 else:
                     yaml.safe_dump(output, stream=fw, indent=self.args.indent, width=0x7fffffff)
-            self.logger.info(f"Kubernetes file \"{out_path}\" updated")
+            self.logger.info(f"Kubernetes file {json.dumps(out_path)} updated")
             return
 
         # If output is directory
         for item_name, item in items.items():
             updated = item.pop("updated", False)
-            f_path = path.join(out_path, f"{item_name}.{file_ext}")
+            f_path = path.normpath(path.join(out_path, f"{item_name}.{file_ext}"))
             with open(f_path, "w") as fw:
                 if self.args.json:
                     json.dump(item, fw, indent=self.args.indent)
@@ -530,21 +532,23 @@ class KomposeEx(object):
         if not compose_path:
             return 1
 
-        # Clean files
-        if self.args.clean:
-            utils.clean(self.args.out)
-
-        # Convert docker compose yaml using kompose
-        # self.logger.info(f"Converting {path.basename(self.args.file)} to {self.args.out}")
-        return_code = self.kompose_convert(compose_path=compose_path)
-        if return_code:
-            return return_code
-
         # Get compose services
         services = self.get_services()
 
-        # Convert with kompose-ex
-        self.kompose_ex_convert(services)
+        # Skip conversion (Only deploy)
+        skip = self.args.skip and self.args.command == "deploy"
+        if not skip:
+            # Clean files
+            if self.args.clean:
+                utils.clean(self.args.out)
+
+            # Convert docker compose yaml using kompose
+            return_code = self.kompose_convert(compose_path=compose_path)
+            if return_code:
+                return return_code
+
+            # Convert with kompose-ex
+            self.kompose_ex_convert(services)
 
         if self.args.command != "deploy":
             return 0

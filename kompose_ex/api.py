@@ -54,7 +54,9 @@ def create_namespace(name, logger=None):
         logger.info(f"namespace \"{name}\" created")
     except client.ApiException as ex:
         body = json.loads(ex.body)
-        logger.error(body["message"])
+        if "already exists" not in body["message"]:
+            raise ex
+        logger.warning(body["message"])
 
     # Wait for namespace creation
     while True:
@@ -70,29 +72,6 @@ def create_namespace(name, logger=None):
                 time.sleep(1)
                 continue
             raise ex
-
-
-@utils.retries(2)
-def apply(files_path, namespace="default", verbose=False, logger=None, **kwargs):
-    logger = logger or logging.getLogger(__name__)
-
-    api_client = client.ApiClient()
-    files = [files_path]
-    if path.isdir(files_path):
-        files = glob(path.join(files_path, "*"))
-    for file_path in files:
-        try:
-            create_from_yaml(
-                api_client,
-                file_path,
-                verbose=verbose,
-                namespace=namespace,
-                **kwargs
-            )
-            logger.info(f"Kubernetes file \"{file_path}\" deployed")
-        except FailToCreateError as ex:
-            body = json.loads(ex.api_exceptions[0].body)
-            raise Exception(f"Kubernetes file \"{file_path}\" failed ({body['message']})")
 
 
 def patch_from_yaml(k8s_client, yml_object, verbose=False, **kwargs):
@@ -132,7 +111,84 @@ def patch_from_yaml(k8s_client, yml_object, verbose=False, **kwargs):
     return resp
 
 
-@utils.retries(2)
+def get_object_name(k8s_object):
+    obj = k8s_object
+    if hasattr(k8s_object, "to_dict"):
+        obj = k8s_object.to_dict()
+
+    group, _, version = obj["apiVersion"].partition("/")
+    kind = obj["kind"].lower()
+    name = obj["metadata"]["name"]
+
+    long_kind = kind
+    if version:
+        long_kind = f"{kind}.{group}"
+
+    return f"{long_kind}/{name}"
+
+
+def apply_object(api_client, yaml_object, namespace="default", verbose=False, logger=None, **kwargs):
+    logger = logger or logging.getLogger(__name__)
+    object_name = get_object_name(yaml_object)
+
+    try:
+        create_from_yaml(
+            api_client,
+            yaml_objects=[yaml_object],
+            verbose=verbose,
+            namespace=namespace,
+            **kwargs
+        )
+        logger.info(f"{object_name} created")
+        return
+
+    except FailToCreateError as ex:
+        body = json.loads(ex.api_exceptions[0].body)
+        error_message = body["message"]
+
+    # Path if already exist
+    if error_message.endswith("already exists"):
+        try:
+            patch_from_yaml(
+                api_client,
+                yml_object=yaml_object,
+                verbose=verbose,
+                namespace=namespace,
+                **kwargs
+            )
+            logger.info(f"{object_name} configured")
+            return
+        except FailToCreateError as ex:
+            body = json.loads(ex.api_exceptions[0].body)
+            error_message = body["message"]
+
+    raise Exception(f"{object_name} failed ({error_message})")
+
+
+def apply(files_path, namespace="default", verbose=False, logger=None, **kwargs):
+    logger = logger or logging.getLogger(__name__)
+
+    api_client = client.ApiClient()
+    files = [files_path]
+    if path.isdir(files_path):
+        files = glob(path.join(files_path, "*"))
+    for file_path in files:
+        with open(file_path, "r", encoding="UTF-8") as fr:
+            _yaml_object = yaml.safe_load(fr)
+
+        yaml_objects = [_yaml_object]
+        if _yaml_object["kind"].lower() == "list":
+            yaml_objects = _yaml_object["items"]
+
+        for yaml_object in yaml_objects:
+            apply_object(
+                api_client, yaml_object,
+                namespace=namespace,
+                verbose=verbose, logger=logger,
+                **kwargs
+            )
+
+
 def patch(files_path, verbose=False, logger=None, **kwargs):
     logger = logger or logging.getLogger(__name__)
 
@@ -146,7 +202,7 @@ def patch(files_path, verbose=False, logger=None, **kwargs):
                 yaml_obj = yaml.safe_load(fr)
                 patch_from_yaml(
                     api_client,
-                    yaml_obj,
+                    yml_object=yaml_obj,
                     verbose=verbose,
                     **kwargs
                 )

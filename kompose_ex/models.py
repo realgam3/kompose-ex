@@ -17,6 +17,9 @@ def convert(k8s_object: dict):
             key = "".join(_key)
 
         k8s_obj[key] = obj
+
+    if "metadata" in k8s_obj:
+        k8s_obj["metadata"]["creationTimestamp"] = None
     return k8s_obj
 
 
