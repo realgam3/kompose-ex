@@ -1,9 +1,10 @@
 # Docker Files
 Dockerfile
 .dockerignore
-docker-compose.yml
+docker-compose*.yml
 k8s/
 k8s.yaml
+.env
 
 # Git Files
 .git/

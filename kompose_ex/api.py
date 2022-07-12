@@ -1,11 +1,11 @@
 import json
 import time
+import yaml
 import logging
 from os import path
 from glob import glob
-
-import yaml
 from kubernetes import client
+from datetime import datetime
 from kubernetes.utils import create_from_yaml, FailToCreateError
 from kubernetes.utils.create_from_yaml import UPPER_FOLLOWED_BY_LOWER_RE, LOWER_OR_NUM_FOLLOWED_BY_UPPER_RE
 
@@ -227,3 +227,29 @@ def load_balancer_address(name, namespace="default", ingress=False):
         namespace=namespace
     ).status
     return status.load_balancer.ingress[0].hostname
+
+
+@utils.retries(2)
+def rollout_restart(name, namespace="default", controller="deployment"):
+    if controller not in ["deployment", "daemonset"]:
+        raise Exception(f"controller {controller} is unknown")
+
+    if controller == "daemonset":
+        controller = "daemon_set"
+
+    apps_api = client.AppsV1Api()
+    now = datetime.utcnow()
+    now_string = str(now.isoformat("T") + "Z")
+    body = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "kubectl.kubernetes.io/restartedAt": now_string
+                    }
+                }
+            }
+        }
+    }
+    patch_namespaced = getattr(apps_api, f"patch_namespaced_{controller}")
+    return patch_namespaced(name=name, namespace=namespace, body=body)

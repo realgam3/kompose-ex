@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 from jsonpath_ng.ext import parser
 
 machine = platform.machine().lower()
+if machine == "x86_64":
+    machine = "amd64"
 system = platform.system().lower()
 
 
@@ -70,7 +72,10 @@ def install_kompose(download_path=None, version="latest"):
     download_path = download_path or os.getcwd()
 
     # Find kompose tar.gz file
+    version = version.lower()
     res = requests.get(f"https://api.github.com/repos/kubernetes/kompose/releases/{version}")
+    if version != "latest":
+        res = requests.get(f"https://api.github.com/repos/kubernetes/kompose/releases/tags/v{version.lstrip('v')}")
     res_json = res.json()
     jsonpath_expr = parser.parse(
         f"$.assets[?(@.name =~ 'kompose-{system}-{machine}.*.tar.gz')]['browser_download_url']"

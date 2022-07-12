@@ -76,9 +76,12 @@ class KomposeEx(object):
     def parse_args(args=None):
         sys_args = args or sys.argv[1:]
         parser = argparse.ArgumentParser(prog=__version__.__title__)
-        parser.add_argument("command", choices=["convert", "deploy", "update-records", "version", "install"])
+        parser.add_argument("command", choices=[
+            "convert", "deploy", "update-records",
+            "rollout-restart", "version", "install"
+        ])
         parser.add_argument("-f", "--file", dest="file", default="docker-compose.yml")
-        parser.add_argument("-o", "--out", dest="out", default="k8s")
+        parser.add_argument("-o", "--out", dest="out", default="")
         parser.add_argument("-c", "--chart", action="store_true", dest="chart")
         parser.add_argument("-j", "--json", action="store_true", dest="json")
         parser.add_argument("-n", "--namespace", dest="namespace", default="default")
@@ -93,12 +96,14 @@ class KomposeEx(object):
         group.add_argument("--deny-egress-cidr", action="extend", nargs="+", metavar="CIDR", dest="deny_egress_cidr")
         parser.add_argument("--create-namespace", action="store_true", dest="create_namespace")
         parser.add_argument("--delete-namespace", action="store_true", dest="delete_namespace")
+        parser.add_argument("--eks-kubeconfig", dest="eks_kubeconfig")
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--route53-hostedzone", dest="route53_hostedzone")
         group.add_argument("--route53-hostedzone-id", dest="route53_hostedzone_id")
+        parser.add_argument("--version", dest="version", default="latest")
         args_known, args_unknown = parser.parse_known_args(args=sys_args)
 
-        if args_known.command not in ["convert", "deploy", "update-records"]:
+        if args_known.command not in ["convert", "deploy", "update-records", "rollout-restart"]:
             return args_known, args_unknown
 
         if not path.exists(args_known.file):
@@ -124,26 +129,33 @@ class KomposeEx(object):
         return records
 
     def kompose_convert(self, kompose_path="kompose", compose_path=None):
-        files = glob(path.join(self.directory, "kompose*"))
+        files = glob(path.join(self.directory, "bin", "kompose*"))
         if files:
             kompose_path = files[0]
 
-        args = [
-            kompose_path, "convert",
-            "-f", compose_path or self.args.file,
-            "-o", self.args.out,
-            "--indent", str(self.args.indent),
-            *self.args_unknown
-        ]
+        args = []
         if self.args.chart:
             args.append("-c")
         if self.args.json:
             args.append("-j")
+        if self.args.verbose > 1:
+            args.append("-v")
+        if self.args.out:
+            args.extend(["-o", self.args.out])
+        if self.args.indent != 2:
+            args.extend(["--indent", str(self.args.indent)])
+
         return_code, _output = utils.process_output(
-            args=args,
+            args=[
+                kompose_path, "convert",
+                "-f", compose_path or self.args.file,
+                *args,
+                *self.args_unknown
+            ],
             stderr=subprocess.STDOUT,
             logger=self.logger
         )
+
         return return_code
 
     def kompose_ex_convert(self, services):
@@ -479,6 +491,7 @@ class KomposeEx(object):
                 "labels": labels,
                 "service": service,
                 "build": "build" in service,
+                "image-pull-policy": labels.get("kompose.image-pull-policy", "Never").lower(),
                 "ingress": {
                     "tls": labels.get("kompose.service.expose.tls-secret", "").lower(),
                     "class": (
@@ -503,12 +516,13 @@ class KomposeEx(object):
         homedir = path.expanduser('~')
         return path.join(homedir, ".kompose-ex")
 
-    def install(self):
-        os.makedirs(self.directory, exist_ok=True)
-        kompose_version = utils.install_kompose(self.directory, version="latest")
+    def install(self, version="latest"):
+        install_directory = path.join(self.directory, "bin")
+        os.makedirs(install_directory, exist_ok=True)
+        kompose_version = utils.install_kompose(install_directory, version=version)
         self.logger.info(f"kompose {kompose_version} installed")
 
-    def convert(self, compose_path, services):
+    def convert(self, services, compose_path):
         # Skip conversion (Only deploy)
         skip = self.args.skip and self.args.command == "deploy"
         if skip:
@@ -521,7 +535,7 @@ class KomposeEx(object):
         # Convert docker compose yaml using kompose
         return_code = self.kompose_convert(compose_path=compose_path)
         if return_code:
-            raise Exception("Kompose conversion failed")
+            raise Exception("kompose conversion failed")
 
         # Convert with kompose-ex
         self.kompose_ex_convert(services)
@@ -549,27 +563,65 @@ class KomposeEx(object):
 
     def update_records(self, services):
         # Update Rout53 DNS Records
+        provider = None
+        provider_kwargs = {}
         if any([self.args.route53_hostedzone, self.args.route53_hostedzone_id]):
             from .dns import route53
 
             route53_hostedzone_id = self.args.route53_hostedzone_id
             if not route53_hostedzone_id:
                 route53_hostedzone_id = route53.get_hosted_zones_by_name(self.args.route53_hostedzone)
+            provider = route53
+            provider_kwargs = dict(zone_id=route53_hostedzone_id)
 
-            for service_name, service in services.items():
-                records = service.get("records", [])
-                if not records:
-                    return
-
-                balancer_address = api.load_balancer_address(
-                    name=service_name,
-                    namespace=self.args.namespace,
-                    ingress=service.get("type", "") == "ingress"
-                )
-                for record in records:
-                    route53.update_cname_record(route53_hostedzone_id, record, balancer_address)
-                    self.logger.info(f"Route53 record {record} is set to {balancer_address}")
+        if not provider:
             return
+
+        for service_name, service in services.items():
+            records = service.get("records", [])
+            if not records:
+                return
+
+            balancer_address = api.load_balancer_address(
+                name=service_name,
+                namespace=self.args.namespace,
+                ingress=service.get("type", "") == "ingress"
+            )
+            for record in records:
+                provider.update_cname_record(name=record, record=balancer_address, **provider_kwargs)
+                self.logger.info(f"Route53 record {record} is set to {balancer_address}")
+            return
+
+    def update_kubeconfig(self, name=None):
+        name = name or self.args.eks_kubeconfig
+        args = [
+            "aws", "eks",
+            "update-kubeconfig",
+            "--name", name
+        ]
+        if self.args.verbose > 1:
+            args.append("--verbose")
+
+        return_code, _output = utils.process_output(
+            args=args,
+            stderr=subprocess.STDOUT,
+            logger=self.logger
+        )
+        if return_code:
+            raise Exception("eks kubeconfig creation failed")
+
+    def rollout_restart(self, services):
+        for service_name, service in services.items():
+            if service["image-pull-policy"] != "always":
+                continue
+
+            res = api.rollout_restart(
+                service_name,
+                namespace=self.args.namespace,
+                controller=service["controller"]
+            )
+            object_name = api.get_object_name(res)
+            self.logger.info(f"{object_name} restarted")
 
     def run(self):
         # Print version
@@ -579,7 +631,7 @@ class KomposeEx(object):
 
         # Install requirements
         if self.args.command == "install":
-            self.install()
+            self.install(version=self.args.version)
             return 0
 
         # Load compose yaml
@@ -596,19 +648,27 @@ class KomposeEx(object):
 
         # Convert docker-compose to kubernetes objects
         if self.args.command in ["convert", "deploy"]:
-            self.convert(compose_path, services)
+            self.convert(services, compose_path)
 
         if self.args.command == "convert":
             return 0
 
         # Load kubernetes config
+        if self.args.eks_kubeconfig:
+            self.update_kubeconfig()
         config.load_config()
 
+        # Deploy kubernetes objects
         if self.args.command == "deploy":
-            # Deploy kubernetes objects
             self.deploy()
 
-        self.update_records(services)
+        #  Restart kubernetes objects
+        if self.args.command in ["deploy", "rollout-restart"]:
+            self.rollout_restart(services)
+
+        #  Update DNS cname records
+        if self.args.command in ["deploy", "update-records"]:
+            self.update_records(services)
 
         return 0
 

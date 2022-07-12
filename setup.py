@@ -54,7 +54,8 @@ setup(
     ],
     extras_require={
         "route53": ["boto3 >= 1.24.27"],
-        "update-records": ["boto3 >= 1.24.27"],
+        "eks": ["awscli >= 1.25.27"],
+        "aws": ["boto3 >= 1.24.27", "awscli >= 1.25.27"],
     },
     project_urls={
         "Source": "https://gitlab.com/BSidesTLV/CTF22/kompose-ex",
