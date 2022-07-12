@@ -10,7 +10,7 @@ import subprocess
 from os import path
 from glob import glob
 from kubernetes import config
-from jsonpath_ng.ext import parser
+from jsonpath_ng import ext as jsonpath_ext
 
 from . import __version__
 from . import models, api, utils
@@ -164,7 +164,7 @@ class KomposeEx(object):
             raise Exception("parameter yaml_object/yaml_path is not set")
 
         if yaml_object:
-            jsonpath_expr = parser.parse(
+            jsonpath_expr = jsonpath_ext.parser.parse(
                 f"$.items[?(@.kind == '{kind}' & @.metadata.name== {repr(service_name)})]"
             )
             res = jsonpath_expr.find(yaml_object)[0].value
@@ -335,17 +335,14 @@ class KomposeEx(object):
 
             # Create CronJob
             if service["cronjob"]:
-                if is_file:
-                    jsonpath_expr = parser.parse(
-                        f"$.items[?(@.kind == 'Pod' & @.metadata.name== {repr(service_name)})]"
-                    )
-                    pod = jsonpath_expr.find(output)[0].value
-                    output["items"].remove(pod)
-                else:
+                pod = self.pop_kompose_kubernetes_object(
+                    kind="Pod",
+                    service_name=service_name,
+                    yaml_object=output if output else None,
+                    yaml_path=None if output else out_path
+                )
+                if not is_file:
                     f_path = path.join(out_path, f"{service_name}-pod.{file_ext}")
-                    with open(f_path) as fr:
-                        pod = yaml.safe_load(fr)
-                    os.remove(f_path)
                     self.logger.info(f"Kubernetes file {json.dumps(f_path)} removed'")
 
                 items[f"{service_name}-cronjob"] = models.V1CronJob(
