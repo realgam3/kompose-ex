@@ -57,10 +57,14 @@ class KomposeEx(object):
                         f"Service \"{service_name}\" won't be created because kompose-ex.controller.type is 'cronjob'"
                     )
 
+            expose_tls = labels.get("kompose-ex.service.expose.tls", "false").lower() == "true"
+            if expose_tls and not labels.get("kompose.service.expose.tls-secret"):
+                labels["kompose.service.expose.tls-secret"] = "null"
+
         # Recreate compose
         compose_path = tempfile.mktemp(prefix="docker-compose.", suffix=".yml")
         with open(compose_path, "w", encoding="UTF-8") as fw:
-            yaml.safe_dump(self.compose, stream=fw, indent=2)
+            yaml.safe_dump(self.compose, stream=fw, indent=self.args.indent, width=0x7fffffff)
 
         # Delete compose file on exit
         atexit.register(self.destroy, compose_path)
@@ -277,7 +281,7 @@ class KomposeEx(object):
                 items[f"{service_name}-daemonset"] = daemonset
 
             # Fix Ingress
-            if service["ingress"]["class"] or service["ingress"]["tls"] == "default":
+            if service["ingress"]["class"] or service["ingress"]["tls"]:
                 ingress = self.pop_kompose_kubernetes_object(
                     kind="Ingress",
                     service_name=service_name,
@@ -285,7 +289,7 @@ class KomposeEx(object):
                     yaml_path=None if output else out_path
                 )
 
-                if service["ingress"]["tls"] == "default":
+                if service["ingress"]["tls"]:
                     for tls_rule in ingress["spec"]["tls"]:
                         tls_rule.pop("secretName", None)
 
@@ -499,7 +503,10 @@ class KomposeEx(object):
                 "build": "build" in service,
                 "image-pull-policy": labels.get("kompose.image-pull-policy", "Never").lower(),
                 "ingress": {
-                    "tls": labels.get("kompose.service.expose.tls-secret", "").lower(),
+                    "tls": (
+                            labels.get("kompose-ex.service.expose.tls", "false").lower() == "true" and
+                            labels.get("kompose.service.expose.tls-secret", "").lower() == "null"
+                    ),
                     "class": (
                             labels.get("kompose.service.expose.ingress-class-name", "") or
                             labels.get("kompose-ex.service.expose.ingress-class-name", "")
