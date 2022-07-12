@@ -58,6 +58,9 @@ class KomposeEx(object):
                     )
 
             expose_tls = labels.get("kompose-ex.service.expose.tls", "false").lower() == "true"
+            if expose_tls and not labels.get("kompose.service.expose"):
+                raise Exception("kompose-ex.service.expose.tls was specified without kompose.service.expose")
+
             if expose_tls and not labels.get("kompose.service.expose.tls-secret"):
                 labels["kompose.service.expose.tls-secret"] = "null"
 
@@ -101,6 +104,7 @@ class KomposeEx(object):
         parser.add_argument("--create-namespace", action="store_true", dest="create_namespace")
         parser.add_argument("--delete-namespace", action="store_true", dest="delete_namespace")
         parser.add_argument("--eks-kubeconfig", dest="eks_kubeconfig")
+        parser.add_argument("--restart", action="store_true", dest="restart")
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--route53-hostedzone", dest="route53_hostedzone")
         group.add_argument("--route53-hostedzone-id", dest="route53_hostedzone_id")
@@ -392,7 +396,8 @@ class KomposeEx(object):
                     ],
                     "resources": [
                         "deployments",
-                        "daemonsets"
+                        "daemonsets",
+                        "statefulsets"
                     ],
                     "resourceNames": [
                         *cron_restart_services
@@ -676,7 +681,8 @@ class KomposeEx(object):
             self.deploy()
 
         #  Restart kubernetes objects
-        if self.args.command in ["deploy", "rollout-restart"]:
+        restart_deploy = self.args.command == "deploy" and self.args.restart
+        if restart_deploy or self.args.command == "rollout-restart":
             self.rollout_restart(services)
 
         #  Update DNS cname records

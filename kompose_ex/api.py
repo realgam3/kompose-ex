@@ -231,11 +231,13 @@ def load_balancer_address(name, namespace="default", ingress=False):
 
 @utils.retries(2)
 def rollout_restart(name, namespace="default", controller="deployment"):
-    if controller not in ["deployment", "daemonset"]:
+    if controller not in ["deployment", "daemonset", "statefulset"]:
         raise Exception(f"controller {controller} is unknown")
 
     if controller == "daemonset":
         controller = "daemon_set"
+    if controller == "statefulset":
+        controller = "stateful_set"
 
     apps_api = client.AppsV1Api()
     now = datetime.utcnow()
