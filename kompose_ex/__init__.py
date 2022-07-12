@@ -342,8 +342,8 @@ class KomposeEx(object):
                     yaml_path=None if output else out_path
                 )
                 if not is_file:
-                    f_path = path.join(out_path, f"{service_name}-pod.{file_ext}")
-                    self.logger.info(f"Kubernetes file {json.dumps(f_path)} removed'")
+                    f_path = path.normpath(path.join(out_path, f"{service_name}-pod.{file_ext}"))
+                    self.logger.info(f"Kubernetes file {json.dumps(f_path)} deleted'")
 
                 items[f"{service_name}-cronjob"] = models.V1CronJob(
                     api_version="batch/v1",
