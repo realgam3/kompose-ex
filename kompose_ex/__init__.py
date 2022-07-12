@@ -158,12 +158,31 @@ class KomposeEx(object):
 
         return return_code
 
+    @staticmethod
+    def pop_kompose_kubernetes_object(kind, service_name, yaml_object=None, yaml_path=None, file_ext="yaml"):
+        if not any([yaml_object, yaml_path]):
+            raise Exception("parameter yaml_object/yaml_path is not set")
+
+        if yaml_object:
+            jsonpath_expr = parser.parse(
+                f"$.items[?(@.kind == '{kind}' & @.metadata.name== {repr(service_name)})]"
+            )
+            res = jsonpath_expr.find(yaml_object)[0].value
+            yaml_object["items"].remove(res)
+        else:
+            f_path = path.join(yaml_path, f"{service_name}-{kind.lower()}.{file_ext}")
+            with open(f_path) as fr:
+                res = yaml.safe_load(fr)
+            os.remove(f_path)
+        return res
+
     def kompose_ex_convert(self, services):
         file_ext = "json" if self.args.json else "yaml"
         is_file = path.isfile(self.args.out)
         out_path = self.args.out
         if self.args.chart:
             out_path = path.join(out_path, "templates")
+        output = {}
         kompose_items = []
         if is_file:
             with open(self.args.out, "r", encoding="UTF-8") as fr:
@@ -243,18 +262,12 @@ class KomposeEx(object):
 
             # Fix DaemonSet
             if service["controller"] == "daemonset":
-                if is_file:
-                    jsonpath_expr = parser.parse(
-                        f"$.items[?(@.kind == 'DaemonSet' & @.metadata.name== {repr(service_name)})]"
-                    )
-                    daemonset = jsonpath_expr.find(output)[0].value
-                    output["items"].remove(daemonset)
-
-                else:
-                    f_path = path.join(out_path, f"{service_name}-daemonset.{file_ext}")
-                    with open(f_path) as fr:
-                        daemonset = yaml.safe_load(fr)
-
+                daemonset = self.pop_kompose_kubernetes_object(
+                    kind="DaemonSet",
+                    service_name=service_name,
+                    yaml_object=output if output else None,
+                    yaml_path=None if output else out_path
+                )
                 daemonset["spec"]["selector"] = {
                     "matchLabels": {
                         "io.kompose.service": service_name
@@ -265,16 +278,12 @@ class KomposeEx(object):
 
             # Fix Ingress
             if service["ingress"]["class"] or service["ingress"]["tls"] == "default":
-                if is_file:
-                    jsonpath_expr = parser.parse(
-                        f"$.items[?(@.kind == 'Ingress' & @.metadata.name== {repr(service_name)})]"
-                    )
-                    ingress = jsonpath_expr.find(output)[0].value
-                    output["items"].remove(ingress)
-                else:
-                    f_path = path.join(out_path, f"{service_name}-ingress.{file_ext}")
-                    with open(f_path) as fr:
-                        ingress = yaml.safe_load(fr)
+                ingress = self.pop_kompose_kubernetes_object(
+                    kind="Ingress",
+                    service_name=service_name,
+                    yaml_object=output if output else None,
+                    yaml_path=None if output else out_path
+                )
 
                 if service["ingress"]["tls"] == "default":
                     for tls_rule in ingress["spec"]["tls"]:
