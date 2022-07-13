@@ -9,7 +9,7 @@ import tempfile
 import subprocess
 from os import path
 from glob import glob
-from kubernetes import config
+from kubernetes import config, client
 from jsonpath_ng import ext as jsonpath_ext
 
 from . import __version__
@@ -37,12 +37,30 @@ class KomposeEx(object):
             service["labels"] = labels
             controller_type = labels.get("kompose.controller.type", "").lower()
             controller_ex_type = labels.get("kompose-ex.controller.type", "").lower()
+            service_ex_type = labels.get("kompose-ex.service.type", "").lower()
             if controller_type and controller_ex_type:
                 raise Exception("kompose-ex.controller.type was specified with kompose.controller.type")
 
             if controller_ex_type == "cronjob" and not labels.get("kompose-ex.cronjob.schedule"):
                 raise Exception(
                     "kompose-ex.controller.type 'cronjob' was specified without kompose-ex.cronjob.schedule"
+                )
+
+            ports = service.get("ports", []) or service.get("expose", [])
+            if service_ex_type == "ingress-nginx" and not ports:
+                raise Exception(
+                    "kompose-ex.controller.type 'ingress-nginx' was specified without expose or ports"
+                )
+
+            udp_ports = False
+            for port in ports:
+                if port.split("/")[-1].lower() == "udp":
+                    udp_ports = True
+                    break
+
+            if service_ex_type == "ingress-nginx" and udp_ports:
+                raise Exception(
+                    "kompose-ex.controller.type 'ingress' was does not support udp ports"
                 )
 
             if controller_ex_type == "cronjob":
@@ -84,7 +102,7 @@ class KomposeEx(object):
         sys_args = args or sys.argv[1:]
         parser = argparse.ArgumentParser(prog=__version__.__title__)
         parser.add_argument("command", choices=[
-            "convert", "deploy", "update-records",
+            "convert", "deploy", "update-records", "patch-ingress",
             "rollout-restart", "version", "install"
         ])
         parser.add_argument("-f", "--file", dest="file", default="docker-compose.yml")
@@ -104,11 +122,16 @@ class KomposeEx(object):
         parser.add_argument("--create-namespace", action="store_true", dest="create_namespace")
         parser.add_argument("--delete-namespace", action="store_true", dest="delete_namespace")
         parser.add_argument("--eks-kubeconfig", dest="eks_kubeconfig")
-        parser.add_argument("--restart", action="store_true", dest="restart")
+        parser.add_argument("--rollout-restart", action="store_true", dest="rollout_restart")
         group = parser.add_mutually_exclusive_group()
         group.add_argument("--route53-hostedzone", dest="route53_hostedzone")
         group.add_argument("--route53-hostedzone-id", dest="route53_hostedzone_id")
         parser.add_argument("--version", dest="version", default="latest")
+        parser.add_argument("--patch-ingress", action="store_true", dest="patch_ingress")
+        parser.add_argument("--tcp-services-configmap", dest="tcp_services_configmap",
+                            default="ingress-nginx/tcp-services")
+        parser.add_argument("--ingress-service", dest="ingress_service",
+                            default="ingress-nginx/ingress-nginx-controller")
         args_known, args_unknown = parser.parse_known_args(args=sys_args)
 
         if args_known.command not in ["convert", "deploy", "update-records", "rollout-restart"]:
@@ -144,6 +167,8 @@ class KomposeEx(object):
         args = []
         if self.args.chart:
             args.append("-c")
+            if not self.args.out:
+                self.args.out = path.splitext(self.args.file)[0]
         if self.args.json:
             args.append("-j")
         if self.args.verbose > 1:
@@ -493,11 +518,14 @@ class KomposeEx(object):
         for name, service in _services.items():
             public = True
             labels = service.get("labels", {})
-            service_type = labels.get("kompose.service.type", "").lower()
-
+            service_type = (
+                    labels.get("kompose-ex.service.type", "").lower() or
+                    labels.get("kompose.service.type", "").lower()
+            )
             if "kompose.service.expose" in labels:
                 service_type = "ingress"
-            elif service_type not in ["loadbalancer", "nodeport"]:
+
+            if service_type not in ["loadbalancer", "nodeport", "ingress", "ingress-nginx"]:
                 public = False
 
             services[name] = {
@@ -518,7 +546,10 @@ class KomposeEx(object):
                     ).lower()
                 },
                 "records": self.parse_records(labels=labels),
-                "controller": labels.get("kompose.controller.type", "deployment").lower(),
+                "controller": (
+                        labels.get("kompose-ex.controller.type", "").lower() or
+                        labels.get("kompose.controller.type", "deployment").lower()
+                ),
                 "allow_egress": labels.get("kompose-ex.egress.allow", "false").lower() == "true",
                 "allow_ingress": labels.get("kompose-ex.ingress.allow", "false").lower() == "true",
                 "cronjob": labels.get("kompose-ex.controller.type", "").lower() == "cronjob",
@@ -597,18 +628,24 @@ class KomposeEx(object):
 
         for service_name, service in services.items():
             records = service.get("records", [])
-            if not records:
+            if not records or not service.get("public"):
                 return
 
+            name = service_name
+            namespace = self.args.namespace
+            if service["type"] == "ingress-nginx":
+                namespace, _, name = self.args.ingress_service.partition("/")
+                if not name:
+                    namespace, name = "default", name
+
             balancer_address = api.load_balancer_address(
-                name=service_name,
-                namespace=self.args.namespace,
+                name=name,
+                namespace=namespace,
                 ingress=service.get("type", "") == "ingress"
             )
             for record in records:
                 provider.update_cname_record(name=record, record=balancer_address, **provider_kwargs)
                 self.logger.info(f"Route53 record {record} is set to {balancer_address}")
-            return
 
     def update_kubeconfig(self, name=None):
         name = name or self.args.eks_kubeconfig
@@ -640,6 +677,64 @@ class KomposeEx(object):
             )
             object_name = api.get_object_name(res)
             self.logger.info(f"{object_name} restarted")
+
+    def patch_ingress(self, services):
+        core_api = client.CoreV1Api()
+
+        patched = False
+        for service_name, service in services.items():
+            if service["type"] != "ingress-nginx":
+                continue
+
+            _service = service.get("service")
+            ports = _service.get("ports", []) or _service.get("expose", [])
+            if not ports:
+                continue
+
+            configmap_data = {}
+            service_ports = []
+            for port in ports:
+                port = int(port.split(":")[0])
+                configmap_data[port] = f"{self.args.namespace}/{service_name}:{port}"
+                service_ports.append({
+                    "name": f"{port}",
+                    "port": port,
+                    "protocol": "TCP",
+                    "targetPort": port,
+                })
+
+            namespace, _, name = self.args.tcp_services_configmap.partition("/")
+            if not namespace:
+                namespace, name = "default", namespace
+
+            res = core_api.patch_namespaced_config_map(
+                name=name,
+                namespace=namespace,
+                body={
+                    "data": configmap_data
+                }
+            )
+            if not patched:
+                self.logger.info(f"{api.get_object_name(res)} patched")
+
+            namespace, _, name = self.args.ingress_service.partition("/")
+            if not namespace:
+                namespace, name = "default", namespace
+
+            res = core_api.patch_namespaced_service(
+                name=name,
+                namespace=namespace,
+                body={
+                    "spec": {
+                        "ports": service_ports
+                    }
+                }
+            )
+            if not patched:
+                self.logger.info(f"{api.get_object_name(res)} patched")
+
+            patched = True
+            self.logger.info(f"{service['controller']}.apps/{service_name} exposed")
 
     def run(self):
         # Print version
@@ -680,9 +775,14 @@ class KomposeEx(object):
         if self.args.command == "deploy":
             self.deploy()
 
+        # Patch ingress controller
+        patch_ingress = self.args.command == "deploy" and self.args.patch_ingress
+        if patch_ingress or self.args.command == "patch-ingress":
+            self.patch_ingress(services)
+
         #  Restart kubernetes objects
-        restart_deploy = self.args.command == "deploy" and self.args.restart
-        if restart_deploy or self.args.command == "rollout-restart":
+        rollout_restart = self.args.command == "deploy" and self.args.rollout_restart
+        if rollout_restart or self.args.command == "rollout-restart":
             self.rollout_restart(services)
 
         #  Update DNS cname records
