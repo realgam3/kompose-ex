@@ -288,7 +288,7 @@ class KomposeEx(object):
         cron_restart_services = {}
         for service_name, service in services.items():
             allow_egress = service.get("allow_egress", False)
-            allow_ingress = service["public"] or service.get("allow_ingress", False)
+            allow_ingress = (service["public"] and self.args.deny_ingress) or service.get("allow_ingress", False)
 
             if service["rollout-restart-cronjob-schedule"]:
                 cron_restart_services[service_name] = service
