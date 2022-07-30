@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import yaml
 import json
@@ -134,15 +135,26 @@ class KomposeEx(object):
                             default="ingress-nginx/ingress-nginx-controller")
         args_known, args_unknown = parser.parse_known_args(args=sys_args)
 
-        if args_known.command not in ["convert", "deploy", "update-records", "rollout-restart"]:
+        namespace = args_known.namespace
+        command = args_known.command
+        if command not in ["convert", "deploy", "update-records", "rollout-restart"]:
             return args_known, args_unknown
 
         if not path.exists(args_known.file):
             parser.error(f"file {args_known.file} is not exist")
 
-        if args_known.command == "update-records" and \
+        if command == "update-records" and \
                 not any([args_known.route53_hostedzone, args_known.route53_hostedzone_id]):
             parser.error(f"update-records argument --route53-hostedzone/--route53-hostedzone-id is not set")
+
+        if command == "deploy" and not re.match(r"^[a-z\d]([-a-z\d]*[a-z\d])?$", namespace):
+            parser.error(
+                f"The Namespace {json.dumps(namespace)} is invalid: "
+                f"metadata.name: Invalid value: {json.dumps(namespace)}: "
+                f"a lowercase RFC 1123 label must consist of lower case alphanumeric characters or '-', "
+                f"and must start and end with an alphanumeric character (e.g. 'my-name',  or '123-abc', "
+                f"regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?')"
+            )
 
         return args_known, args_unknown
 
