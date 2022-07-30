@@ -83,7 +83,7 @@ class KomposeEx(object):
                 labels["kompose.service.expose.tls-secret"] = "null"
 
         # Recreate compose
-        compose_path = tempfile.mktemp(prefix="docker-compose.", suffix=".yml")
+        compose_path = tempfile.mktemp(prefix="docker-compose.", suffix=".yml", dir=os.getcwd())
         with open(compose_path, "w", encoding="UTF-8") as fw:
             yaml.safe_dump(self.compose, stream=fw, indent=self.args.indent, width=0x7fffffff)
 
