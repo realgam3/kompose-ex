@@ -1,0 +1,30 @@
+ARG PYTHON_VERSION=3.10
+FROM python:${PYTHON_VERSION}-slim
+LABEL maintainer="Tomer Zait <realgam3@gmail.com>"
+
+ARG KOMPOSE_VERSION=1.26.1
+ARG EXTRA_REQUIREMENTS=aws
+
+ENV HOME=/root
+ENV PATH=${HOME}/.local/bin:${PATH}
+ENV DEBIAN_FRONTEND=noninteractive
+COPY . /usr/src/app/
+RUN set -eux; \
+    \
+    apt-get update; \
+    apt-get install -y \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg; \
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null; \
+    apt-get update; \
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin; \
+    ln -s /usr/libexec/docker/cli-plugins/docker-compose /usr/bin/docker-compose; \
+    \
+    pip install --no-cache --user -e "/usr/src/app[${EXTRA_REQUIREMENTS}]"; \
+    kompose-ex install --version ${KOMPOSE_VERSION}
