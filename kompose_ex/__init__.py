@@ -315,6 +315,9 @@ class KomposeEx(object):
                 )
                 containers = manifest["spec"]["template"]["spec"]["containers"]
                 for container in containers:
+                    if container.get("name") != service_name:
+                        continue
+
                     container["securityContext"] = container.get("securityContext", {})
                     container["securityContext"].update({
                         "readOnlyRootFilesystem": True
