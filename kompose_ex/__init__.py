@@ -305,6 +305,23 @@ class KomposeEx(object):
             if service["rollout-restart-cronjob-schedule"]:
                 cron_restart_services[service_name] = service
 
+            # Fix ReadOnly
+            if service["service"].get("read_only", False):
+                manifest = self.pop_kompose_kubernetes_object(
+                    kind=service["controller"],
+                    service_name=service_name,
+                    yaml_object=output if output else None,
+                    yaml_path=None if output else out_path
+                )
+                containers = manifest["spec"]["template"]["spec"]["containers"]
+                for container in containers:
+                    container["securityContext"] = container.get("securityContext", {})
+                    container["securityContext"].update({
+                        "readOnlyRootFilesystem": True
+                    })
+                manifest["metadata"]["annotations"]["kompose-ex.updated"] = "true"
+                items[f"{service_name}-{service['controller']}"] = manifest
+
             # Fix DaemonSet
             if service["controller"] == "daemonset":
                 daemonset = self.pop_kompose_kubernetes_object(
