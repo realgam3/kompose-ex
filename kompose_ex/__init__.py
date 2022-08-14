@@ -410,6 +410,10 @@ class KomposeEx(object):
                     f_path = path.normpath(path.join(out_path, f"{service_name}-pod.{file_ext}"))
                     self.logger.info(f"Kubernetes file {json.dumps(f_path)} deleted")
 
+                backoff_limit = service["labels"].get("kompose-ex.pod.backoff_limit", None)
+                if backoff_limit:
+                    backoff_limit = int(backoff_limit)
+
                 items[f"{service_name}-cronjob"] = models.V1CronJob(
                     api_version="batch/v1",
                     metadata=models.V1ObjectMeta(
@@ -422,6 +426,7 @@ class KomposeEx(object):
                         concurrency_policy=service["cronjob-concurrency-policy"],
                         job_template=models.V1JobTemplateSpec(
                             spec=models.V1JobSpec(
+                                backoff_limit=backoff_limit,
                                 template=models.V1PodTemplateSpec(
                                     spec=pod["spec"]
                                 )
