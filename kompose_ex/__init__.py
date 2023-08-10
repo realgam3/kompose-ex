@@ -12,6 +12,7 @@ from os import path
 from glob import glob
 from kubernetes import config, client
 from jsonpath_ng import ext as jsonpath_ext
+from distutils.version import StrictVersion
 
 from . import __version__
 from . import models, api, utils
@@ -171,12 +172,29 @@ class KomposeEx(object):
 
         return records
 
-    def kompose_convert(self, kompose_path="kompose", compose_path=None):
-        files = glob(path.join(self.directory, "bin", "kompose*"))
-        if files:
-            kompose_path = files[0]
+    def kompose_version(self, kompose_path=None):
+        kompose_path = kompose_path or self.kompose_path
+        return_code, output = utils.process_output(
+            args=[
+                kompose_path, "version",
+            ],
+            stderr=subprocess.STDOUT,
+        )
 
-        args = []
+        if return_code != 0:
+            raise Exception(f"kompose version failed: exit code {return_code}")
+
+        res_re = re.search(r"(?P<version>\d+\.\d+\.\d+)", output.decode("utf-8"))
+        if not res_re:
+            raise Exception(f"kompose version failed: {output}")
+
+        return res_re.group("version")
+
+    def kompose_convert(self, kompose_path=None, compose_path=None):
+        kompose_path = kompose_path or self.kompose_path
+        args = [
+            "-n", self.args.namespace,
+        ]
         if self.args.chart:
             args.append("-c")
             if not self.args.out:
@@ -244,6 +262,7 @@ class KomposeEx(object):
                 metadata=models.V1ObjectMeta(
                     name="deny-ingress",
                     annotations=self.annotations,
+                    namespace=self.args.namespace,
                 ),
                 spec=models.V1NetworkPolicySpec(
                     ingress=[{
@@ -263,6 +282,7 @@ class KomposeEx(object):
                 metadata=models.V1ObjectMeta(
                     name="deny-egress",
                     annotations=self.annotations,
+                    namespace=self.args.namespace,
                 ),
                 spec=models.V1NetworkPolicySpec(
                     egress=[{
@@ -282,6 +302,7 @@ class KomposeEx(object):
                 metadata=models.V1ObjectMeta(
                     name="deny-egress-cidr",
                     annotations=self.annotations,
+                    namespace=self.args.namespace,
                 ),
                 spec=models.V1NetworkPolicySpec(
                     egress=[{
@@ -325,22 +346,6 @@ class KomposeEx(object):
                 manifest["metadata"]["annotations"]["kompose-ex.updated"] = "true"
                 items[f"{service_name}-{service['controller']}"] = manifest
 
-            # Fix DaemonSet
-            if service["controller"] == "daemonset":
-                daemonset = self.pop_kompose_kubernetes_object(
-                    kind="DaemonSet",
-                    service_name=service_name,
-                    yaml_object=output if output else None,
-                    yaml_path=None if output else out_path
-                )
-                daemonset["spec"]["selector"] = {
-                    "matchLabels": {
-                        "io.kompose.service": service_name
-                    }
-                }
-                daemonset["metadata"]["annotations"]["kompose-ex.updated"] = "true"
-                items[f"{service_name}-daemonset"] = daemonset
-
             # Fix Ingress
             if service["ingress"]["class"] or service["ingress"]["tls"]:
                 ingress = self.pop_kompose_kubernetes_object(
@@ -367,6 +372,7 @@ class KomposeEx(object):
                     metadata=models.V1ObjectMeta(
                         name=f"allow-ingress-{service_name}",
                         annotations=service["labels"],
+                        namespace=self.args.namespace,
                     ),
                     spec=models.V1NetworkPolicySpec(
                         ingress=[{}],
@@ -386,6 +392,7 @@ class KomposeEx(object):
                     metadata=models.V1ObjectMeta(
                         name=f"allow-egress-{service_name}",
                         annotations=service["labels"],
+                        namespace=self.args.namespace,
                     ),
                     spec=models.V1NetworkPolicySpec(
                         egress=[{}],
@@ -420,6 +427,7 @@ class KomposeEx(object):
                         name=service_name,
                         annotations=pod["metadata"]["annotations"],
                         labels=pod["metadata"]["labels"],
+                        namespace=self.args.namespace,
                     ),
                     spec=models.V1CronJobSpec(
                         schedule=service["cronjob-schedule"],
@@ -441,6 +449,7 @@ class KomposeEx(object):
                 metadata=models.V1ObjectMeta(
                     name="rollout-restart",
                     annotations=self.annotations,
+                    namespace=self.args.namespace,
                 ),
             ).to_dict()
 
@@ -450,6 +459,7 @@ class KomposeEx(object):
                 metadata=models.V1ObjectMeta(
                     name="rollout-restart",
                     annotations=self.annotations,
+                    namespace=self.args.namespace,
                 ),
                 rules=[{
                     "apiGroups": [
@@ -477,6 +487,7 @@ class KomposeEx(object):
                 metadata=models.V1ObjectMeta(
                     name="rollout-restart",
                     annotations=self.annotations,
+                    namespace=self.args.namespace,
                 ),
                 role_ref={
                     "apiGroup": "rbac.authorization.k8s.io",
@@ -496,6 +507,7 @@ class KomposeEx(object):
                     metadata=models.V1ObjectMeta(
                         name=f"rollout-restart-{service_name}",
                         annotations=service["labels"],
+                        namespace=self.args.namespace,
                     ),
                     spec=models.V1CronJobSpec(
                         concurrency_policy="Forbid",
@@ -602,6 +614,13 @@ class KomposeEx(object):
         homedir = path.expanduser('~')
         return path.join(homedir, ".kompose-ex")
 
+    @property
+    def kompose_path(self):
+        files = glob(path.join(self.directory, "bin", "kompose*"))
+        if files:
+            return files[0]
+        return "kompose"
+
     def install(self, version="latest"):
         install_directory = path.join(self.directory, "bin")
         os.makedirs(install_directory, exist_ok=True)
@@ -617,6 +636,28 @@ class KomposeEx(object):
         # Clean files
         if self.args.clean:
             utils.clean(self.args.out)
+
+        # Check kompose version
+        try:
+            kompose_version = self.kompose_version()
+        except Exception as e:
+            self.logger.error(e)
+            return 1
+
+        tested_kompose_version = __version__.__kompose_version__
+        if StrictVersion(kompose_version) < StrictVersion(tested_kompose_version):
+            self.logger.fatal(
+                f"kompose version is lower than the tested kompose version {tested_kompose_version}, "
+                f"please upgrade with `kompose-ex install --version {tested_kompose_version}` or `kompose-ex install`"
+            )
+            return 1
+
+        elif StrictVersion(kompose_version) > StrictVersion(tested_kompose_version):
+            self.logger.warning(
+                f"kompose version is higher than the tested kompose version {tested_kompose_version}, "
+                f"if you experience abnormal behavior, "
+                f"you can downgrade with `kompose-ex install --version {tested_kompose_version}`"
+            )
 
         # Convert docker compose yaml using kompose
         return_code = self.kompose_convert(compose_path=compose_path)

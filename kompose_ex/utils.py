@@ -52,7 +52,7 @@ def process_output(*args, **kwargs):
         for line in ex.output.decode().splitlines():
             logger.error(f"[{command}] {line}")
         logger.error(f"[{command}] exit {ex.returncode}")
-        code = ex.returncode,
+        code = ex.returncode
     return code, output
 
 
