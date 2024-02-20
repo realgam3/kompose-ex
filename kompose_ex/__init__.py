@@ -37,16 +37,7 @@ class KomposeEx(object):
             labels = service.get("labels", {})
             labels.update(self.annotations)
             service["labels"] = labels
-            controller_type = labels.get("kompose.controller.type", "").lower()
-            controller_ex_type = labels.get("kompose-ex.controller.type", "").lower()
             service_ex_type = labels.get("kompose-ex.service.type", "").lower()
-            if controller_type and controller_ex_type:
-                raise Exception("kompose-ex.controller.type was specified with kompose.controller.type")
-
-            if controller_ex_type == "cronjob" and not labels.get("kompose-ex.cronjob.schedule"):
-                raise Exception(
-                    "kompose-ex.controller.type 'cronjob' was specified without kompose-ex.cronjob.schedule"
-                )
 
             ports = service.get("ports", []) or service.get("expose", [])
             if service_ex_type == "ingress-nginx" and not ports:
@@ -56,7 +47,7 @@ class KomposeEx(object):
 
             udp_ports = False
             for port in ports:
-                if port.split("/")[-1].lower() == "udp":
+                if port.split("/", 1)[-1].lower() == "udp":
                     udp_ports = True
                     break
 
@@ -64,25 +55,6 @@ class KomposeEx(object):
                 raise Exception(
                     "kompose-ex.controller.type 'ingress' was does not support udp ports"
                 )
-
-            if controller_ex_type == "cronjob":
-                restart = service.get("restart", "no")
-                if service.get("restart", "no") not in ["no", "on-failure"]:
-                    service["restart"] = "on-failure"
-                    self.logger.warning(
-                        f"Restart policy '{restart}' in service challenge is not supported, convert it to 'on-failure'"
-                    )
-                if service.pop("expose", []) + service.pop("ports", []):
-                    self.logger.warning(
-                        f"Service \"{service_name}\" won't be created because kompose-ex.controller.type is 'cronjob'"
-                    )
-
-            expose_tls = labels.get("kompose-ex.service.expose.tls", "false").lower() == "true"
-            if expose_tls and not labels.get("kompose.service.expose"):
-                raise Exception("kompose-ex.service.expose.tls was specified without kompose.service.expose")
-
-            if expose_tls and not labels.get("kompose.service.expose.tls-secret"):
-                labels["kompose.service.expose.tls-secret"] = "null"
 
         # Recreate compose
         compose_path = tempfile.mktemp(prefix="docker-compose.", suffix=".yml", dir=".")
@@ -346,25 +318,6 @@ class KomposeEx(object):
                 manifest["metadata"]["annotations"]["kompose-ex.updated"] = "true"
                 items[f"{service_name}-{service['controller']}"] = manifest
 
-            # Fix Ingress
-            if service["ingress"]["class"] or service["ingress"]["tls"]:
-                ingress = self.pop_kompose_kubernetes_object(
-                    kind="Ingress",
-                    service_name=service_name,
-                    yaml_object=output if output else None,
-                    yaml_path=None if output else out_path
-                )
-
-                if service["ingress"]["tls"]:
-                    for tls_rule in ingress["spec"]["tls"]:
-                        tls_rule.pop("secretName", None)
-
-                if service["ingress"]["class"]:
-                    ingress["spec"]["ingressClassName"] = service["ingress"]["class"]
-
-                ingress["metadata"]["annotations"]["kompose-ex.updated"] = "true"
-                items[f"{service_name}-ingress"] = ingress
-
             # Allow ingress to service
             if allow_ingress:
                 items[f"allow-ingress-{service_name}-network-policy"] = models.V1NetworkPolicy(
@@ -402,44 +355,6 @@ class KomposeEx(object):
                             }
                         },
                         policy_types=["Egress"]
-                    )
-                ).to_dict()
-
-            # Create CronJob
-            if service["cronjob"]:
-                pod = self.pop_kompose_kubernetes_object(
-                    kind="Pod",
-                    service_name=service_name,
-                    yaml_object=output if output else None,
-                    yaml_path=None if output else out_path
-                )
-                if not is_file:
-                    f_path = path.normpath(path.join(out_path, f"{service_name}-pod.{file_ext}"))
-                    self.logger.info(f"Kubernetes file {json.dumps(f_path)} deleted")
-
-                backoff_limit = service["labels"].get("kompose-ex.pod.backoff_limit", None)
-                if backoff_limit:
-                    backoff_limit = int(backoff_limit)
-
-                items[f"{service_name}-cronjob"] = models.V1CronJob(
-                    api_version="batch/v1",
-                    metadata=models.V1ObjectMeta(
-                        name=service_name,
-                        annotations=pod["metadata"]["annotations"],
-                        labels=pod["metadata"]["labels"],
-                        namespace=self.args.namespace,
-                    ),
-                    spec=models.V1CronJobSpec(
-                        schedule=service["cronjob-schedule"],
-                        concurrency_policy=service["cronjob-concurrency-policy"],
-                        job_template=models.V1JobTemplateSpec(
-                            spec=models.V1JobSpec(
-                                backoff_limit=backoff_limit,
-                                template=models.V1PodTemplateSpec(
-                                    spec=pod["spec"]
-                                )
-                            )
-                        )
                     )
                 ).to_dict()
 
